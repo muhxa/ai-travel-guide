@@ -1,0 +1,183 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <title>AI Travel Guide</title>
+  <style>
+    body {
+      font-family: Verdana, sans-serif;
+      background-color: #f3f4f6;
+      color: #333;
+      margin: 0;
+      padding: 20px;
+    }
+    .container { max-width: 650px; margin: 0 auto; }
+
+    header { text-align: center; margin-bottom: 30px; }
+    .logo { font-size: 26px; font-weight: bold; color: #7c3aed; }
+
+    .card {
+      background: white;
+      padding: 30px;
+      border-radius: 12px;
+      box-shadow: 0 4px 10px rgba(0,0,0,0.05);
+      margin-bottom: 20px;
+    }
+
+    h2 { margin-top: 0; color: #1f2937; }
+    label { display: block; margin: 10px 0 5px; font-weight: bold; font-size: 14px; }
+
+    input, textarea {
+      width: 100%; padding: 12px; margin-bottom: 15px;
+      border: 1px solid #ddd; border-radius: 8px;
+      font-size: 16px; box-sizing: border-box; font-family: inherit;
+    }
+    input:focus, textarea:focus { border-color: #7c3aed; outline: none; }
+
+    button {
+      background-color: #7c3aed; color: white; border: none;
+      padding: 12px; width: 100%; border-radius: 8px;
+      font-size: 16px; cursor: pointer; font-weight: bold;
+    }
+    button:hover { background-color: #6d28d9; }
+
+    button.secondary { background: white; color: #7c3aed; border: 2px solid #7c3aed; margin-top: 10px; }
+    button.secondary:hover { background: #f5f3ff; }
+
+    button.logout-btn { width: auto; background: #e5e7eb; color: #374151; padding: 8px 16px; font-size: 14px; }
+    button.logout-btn:hover { background: #d1d5db; }
+
+    .result-box { border-left: 5px solid #7c3aed; background: white; padding: 20px; border-radius: 8px; margin-top: 20px; }
+    .stats-grid { background: #f9fafb; padding: 15px; border-radius: 8px; margin: 15px 0; font-size: 14px; }
+    .stat-item b { display: block; color: #6b7280; font-size: 12px; text-transform: uppercase; }
+
+    .ai-text { line-height: 1.6; white-space: pre-wrap; }
+    .error-msg { color: #dc2626; background: #fef2f2; padding: 10px; border-radius: 6px; margin-bottom: 15px; display: none; }
+    .hidden { display: none !important; }
+  </style>
+</head>
+<body>
+
+<div class="container">
+  <header><div class="logo">AI Travel Guide</div></header>
+
+  <!-- Вход -->
+  <div id="auth-section" class="card">
+    <h2>Вход</h2>
+    <label>Логин</label><input type="text" id="auth-username">
+    <label>Пароль</label><input type="password" id="auth-password">
+    <div id="auth-msg" class="error-msg"></div>
+    <button onclick="doAuth('login')">Войти</button>
+    <button class="secondary" onclick="doAuth('register')">Регистрация</button>
+  </div>
+
+  <!-- Приложение -->
+  <div id="app-section" class="hidden">
+    <div class="card" style="padding: 15px 25px; display:flex; justify-content:space-between; align-items:center;">
+      <span id="username-display" style="font-weight:bold;"></span>
+      <button class="logout-btn" onclick="doLogout()">Выйти</button>
+    </div>
+
+    <div class="card">
+      <h2>Новый запрос</h2>
+      <label>Страна (на английском)</label><input type="text" id="country-input" placeholder="Italy">
+      <label>Вопрос</label><textarea id="query-input" rows="4" placeholder="Что посмотреть?"></textarea>
+      <div id="ask-msg" class="error-msg"></div>
+      <button onclick="doAsk()">Отправить</button>
+    </div>
+
+    <div id="result-section" class="hidden result-box">
+      <h3 id="country-name" style="margin-top:0;"></h3>
+      <div class="stats-grid" id="country-stats"></div>
+      <div class="ai-text" id="ai-answer"></div>
+    </div>
+  </div>
+</div>
+
+<script>
+  // Безопасная проверка пользователя
+  const currentUser = "{{ username | default('', true) }}";
+
+  window.addEventListener('DOMContentLoaded', () => {
+    if (currentUser && currentUser.length > 0) {
+      showApp(currentUser);
+    }
+  });
+
+  async function doAuth(action) {
+    const u = document.getElementById('auth-username').value;
+    const p = document.getElementById('auth-password').value;
+    if (!u || !p) return showMsg('auth-msg', 'Заполните поля');
+
+    try {
+        const resp = await fetch(action === 'login' ? '/login' : '/register', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({username: u, password: p})
+        });
+        const data = await resp.json();
+        if (data.error) showMsg('auth-msg', data.error);
+        else showApp(data.username);
+    } catch (e) {
+        showMsg('auth-msg', 'Ошибка соединения');
+    }
+  }
+
+  async function doAsk() {
+    const c = document.getElementById('country-input').value;
+    const q = document.getElementById('query-input').value;
+    if (!c || !q) return showMsg('ask-msg', 'Заполните поля');
+
+    document.getElementById('result-section').classList.add('hidden');
+    const btn = document.querySelector('#app-section .card button');
+    btn.textContent = '...';
+    btn.disabled = true;
+
+    try {
+        const resp = await fetch('/ask', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({country: c, query: q})
+        });
+        const data = await resp.json();
+        btn.textContent = 'Отправить';
+        btn.disabled = false;
+
+        if (data.error) showMsg('ask-msg', data.error);
+        else showResult(data);
+    } catch (e) {
+        btn.textContent = 'Отправить';
+        btn.disabled = false;
+        showMsg('ask-msg', 'Ошибка соединения');
+    }
+  }
+
+  function showResult(data) {
+    document.getElementById('country-name').textContent = data.country_info.name;
+    document.getElementById('country-stats').innerHTML = `
+        <div class="stat-item"><b>Столица</b>${data.country_info.capital}</div>
+        <div class="stat-item"><b>Валюта</b>${data.country_info.currencies}</div>
+        <div class="stat-item"><b>Язык</b>${data.country_info.languages}</div>`;
+    document.getElementById('ai-answer').textContent = data.answer;
+    document.getElementById('result-section').classList.remove('hidden');
+  }
+
+  async function doLogout() {
+      await fetch('/logout', {method: 'POST'});
+      location.reload();
+  }
+
+  function showApp(u) {
+    document.getElementById('auth-section').classList.add('hidden');
+    document.getElementById('app-section').classList.remove('hidden');
+    document.getElementById('username-display').textContent = u;
+  }
+
+  function showMsg(id, text) {
+      const el = document.getElementById(id);
+      el.textContent = text;
+      el.style.display = 'block';
+  }
+</script>
+</body>
+</html>
