@@ -1,4 +1,4 @@
-mport os
+import os
 import requests
 from flask import Flask, request, jsonify, session, render_template
 from flask_sqlalchemy import SQLAlchemy  # библиотека для работы с базой данных
