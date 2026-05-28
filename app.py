@@ -1,4 +1,4 @@
-import os
+mport os
 import requests
 from flask import Flask, request, jsonify, session, render_template
 from flask_sqlalchemy import SQLAlchemy  # библиотека для работы с базой данных
@@ -44,21 +44,28 @@ with app.app_context():
 # Вспомогательные функции
 
 def get_country(name):
-    #Получает данные  (REST Countries API)
+    """Получает данные о стране (с защитой от сбоя API)"""
     try:
-        # Делаем запрос к внешнему сайту
-        r = requests.get(f"https://restcountries.com/v3.1/name/{name}", timeout=10)
-        data = r.json()[0]  # берем первый результат
+        # Пытаемся получить данные из интернета
+        r = requests.get(f"https://restcountries.com/v3.1/name/{name}", timeout=5)
+        data = r.json()[0]
         return {
             "name": data['name']['common'],
             "capital": data.get('capital', ['N/A'])[0],
-            "currencies": "Информация есть",
-            "languages": "Информация есть",
+            "currencies": "Доступно",
+            "languages": "Доступно",
             "population": data.get('population', 0)
         }
     except:
-        return None  # если ошибка или страна не найдена
-
+        # Если интернет не работает или API упал — возвращаем тестовые данные
+        print("Внимание: REST Countries API недоступен. Используются тестовые данные.")
+        return {
+            "name": name.title(), # Делаем первую букву заглавной
+            "capital": "Столица (API недоступен)",
+            "currencies": "Национальная валюта",
+            "languages": "Официальный язык",
+            "population": "Информация временно недоступна"
+        }
 
 def ask_ai(question):
     #Отправляет вопрос в локальный ИИ (Ollama)
@@ -145,8 +152,7 @@ def logout():
 
 @app.route("/ask", methods=["POST"])
 def ask():
-    #Обработка вопроса пользователя
-    # Проверка: если не вошел в систему, доступ запрещен
+    """Обработка вопроса пользователя"""
     if "uid" not in session:
         return jsonify({"error": "Войдите в систему"}), 401
 
@@ -167,15 +173,13 @@ def ask():
     h = History(user_id=session["uid"], country=info['name'], question=q, answer=answer)
 
     try:
-        db.session.add(h)  # добавляем запись
-        db.session.commit()  # сохраняем изменения
-    except Exception as e:
+        db.session.add(h)
+        db.session.commit()
+    except:
         db.session.rollback()
-        print(f"Ошибка сохранения: {e}")
 
     # Шаг 4: Отправляем ответ обратно на сайт
     return jsonify({"answer": answer, "country_info": info})
-
 
 if __name__ == "__main__":
     print("Сайт запущен: http://127.0.0.1:5000")
