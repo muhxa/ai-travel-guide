@@ -44,7 +44,6 @@ with app.app_context():
 # Вспомогательные функции
 
 def get_country(name):
-    """Получает данные о стране (с защитой от сбоя API)"""
     try:
         # Пытаемся получить данные из интернета
         r = requests.get(f"https://restcountries.com/v3.1/name/{name}", timeout=5)
