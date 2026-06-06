@@ -1,157 +1,158 @@
-import os
+import os #для API
 import requests
 from flask import Flask, request, jsonify, session, render_template
-from flask_sqlalchemy import SQLAlchemy  # библиотека для работы с базой данных
-from werkzeug.security import generate_password_hash, check_password_hash  # для шифрования паролей
+from flask_sqlalchemy import SQLAlchemy
+from werkzeug.security import generate_password_hash, check_password_hash
 from dotenv import load_dotenv
-from datetime import datetime
 
-load_dotenv()  # загружаем настройки
+load_dotenv()
 
 app = Flask(__name__)
-app.secret_key = "secret-key"  # ключ, чтобы сайт помнил, кто вошел
-
-# Подключение к базе данных PostgreSQL
+app.secret_key = "secret-key"
+# подяключаем к базе данных
 app.config['SQLALCHEMY_DATABASE_URI'] = "postgresql://postgres@localhost/travel_db"
-db = SQLAlchemy(app)  # создаем инструмент для работы с базой
+db = SQLAlchemy(app)
 
 
-# Таблицы
+CITIES_DB = {
+    "france": ["Париж", "Ницца", "Лион", "Марсель", "Бордо", "Страсбург"],
+    "italy": ["Рим", "Милан", "Венеция", "Флоренция", "Неаполь"],
+    "spain": ["Мадрид", "Барселона", "Валенсия", "Севилья"],
+    "germany": ["Берлин", "Мюнхен", "Гамбург", "Кёльн"],
+    "japan": ["Токио", "Киото", "Осака", "Хиросима", "Саппоро"],
+    "united states of america": ["Нью-Йорк", "Лос-Анджелес", "Чикаго", "Майами", "Лас-Вегас"],
+    "thailand": ["Бангкок", "Пхукет", "Паттайя", "Чиангмай"],
+    "turkey": ["Стамбул", "Анталья", "Анкара", "Измир"],
+    "egypt": ["Каир", "Шарм-эль-Шейх", "Хургада", "Луксор"],
+    "united kingdom": ["Лондон", "Манчестер", "Ливерпуль", "Эдинбург"],
+    "russia": ["Москва", "Санкт-Петербург", "Казань", "Сочи"]
+}
+
 
 class User(db.Model):
-    #Таблица с пользователями
     __tablename__ = 'users'
-    id = db.Column(db.Integer, primary_key=True)  # уникальный номер
-    username = db.Column(db.String(80), unique=True)  # логин
-    password = db.Column(db.String(200))  # зашифрованный пароль
+    id = db.Column(db.Integer, primary_key=True)
+    username = db.Column(db.String(80), unique=True)
+    password = db.Column(db.String(200))
 
 
 class History(db.Model):
-    #Таблица истории запросов
     __tablename__ = 'history'
     id = db.Column(db.Integer, primary_key=True)
-    user_id = db.Column(db.Integer)  # кто спросил
-    country = db.Column(db.String(100))  # про какую страну
-    question = db.Column(db.Text)  # вопрос
-    answer = db.Column(db.Text)  # ответ ИИ
+    user_id = db.Column(db.Integer)
+    country = db.Column(db.String(100))
+    question = db.Column(db.Text)
+    answer = db.Column(db.Text)
 
 
-# При запуске создаем таблицы, если их нет
 with app.app_context():
     db.create_all()
 
 
-# Вспомогательные функции
-
 def get_country(name):
     try:
-        # Пытаемся получить данные из интернета
-        r = requests.get(f"https://restcountries.com/v3.1/name/{name}", timeout=5)
-        data = r.json()[0]
+        clean_name = name.strip().lower() #красивый ввод без лишних пробелов и с мал буквы
+        import urllib.parse
+        encoded_name = urllib.parse.quote(clean_name) #спец символы для ссылки
+
+        # Пробуем найти страну
+        r = requests.get(f"https://restcountries.com/v3.1/name/{encoded_name}?fullText=false", timeout=15)
+
+        if r.status_code != 200:
+            return None
+
+        data = r.json()[0] #первый красивый словарь с поиска берём
+#ДОП для городов
+        # Определяем ключ для поиска городов
+        api_name = data['name']['common'].lower()
+
+        cities = []
+        if clean_name in CITIES_DB: #проверка по исходному вводу
+            cities = CITIES_DB[clean_name]
+        elif api_name in CITIES_DB: # проверка по красивому вводу
+            cities = CITIES_DB[api_name]
+
         return {
             "name": data['name']['common'],
-            "capital": data.get('capital', ['N/A'])[0],
-            "currencies": "Доступно",
-            "languages": "Доступно",
-            "population": data.get('population', 0)
+            "capital": data.get('capital', ['Нет данных'])[0],
+            "languages": ", ".join(data.get('languages', {}).values()) if data.get('languages') else "Нет данных",
+            "currencies": ", ".join([c['name'] for c in data.get('currencies', {}).values()]) if data.get(
+                'currencies') else "Нет данных",
+            "cities": cities  # Передаем список городов
         }
-    except:
-        # Если интернет не работает или API упал — возвращаем тестовые данные
-        print("Внимание: REST Countries API недоступен. Используются тестовые данные.")
-        return {
-            "name": name.title(), # Делаем первую букву заглавной
-            "capital": "Столица (API недоступен)",
-            "currencies": "Национальная валюта",
-            "languages": "Официальный язык",
-            "population": "Информация временно недоступна"
-        }
+
+    except Exception as e: #если стрчока - ошибка, не падает сайт
+        print(f"Ошибка API: {e}")
+        return None
+
 
 def ask_ai(question):
-    #Отправляет вопрос в локальный ИИ (Ollama)
     try:
-        # Стучимся в программу Ollama на твоем компьютере
-        r = requests.post("http://localhost:11434/api/chat", json={
-            "model": "mistral",  # имя модели
-            "messages": [{"role": "user", "content": question}],
-            "stream": False  # ждем полный ответ
-        }, timeout=60)
-        return r.json()['message']['content']
-    except:
-        return "Ошибка подключения к ИИ. Проверь, запущена ли Ollama."
+        api_key = os.getenv("MISTRAL_API_KEY") #ищем ключ в .env
+        if not api_key:
+            return "Ошибка: API ключ не найден."
+
+        r = requests.post(
+            "https://api.mistral.ai/v1/chat/completions",
+            headers={"Content-Type": "application/json", "Authorization": f"Bearer {api_key}"},
+            json={
+                "model": "mistral-small-latest",
+                "messages": [{"role": "user", "content": question}]
+            }
+        )
+        return r.json()['choices'][0]['message']['content']
+    except Exception as e:
+        return f"Ошибка ИИ: {str(e)}"
 
 
-# Маршруты (Страницы сайта)
-
-@app.route("/")
+@app.route("/") #запускает функцию главной страницы когда кто то на моём адресе
 def index():
-    #Главная страница
     user = None
-    # Если пользователь входил, ищем его в базе по ID из сессии
-    if "uid" in session:
-        user = db.session.get(User, session["uid"])
-
-    # Передаем имя пользователя в HTML шаблон
+    if "uid" in session: #условие uid в спец словаре
+        user = db.session.get(User, session["uid"]) #ищем в базе
     return render_template("index.html", username=user.username if user else None)
 
 
-@app.route("/login", methods=["POST"])
+@app.route("/login", methods=["POST"])#post прячет данные внутри запроса
 def login():
-    #Вход в систему
     data = request.get_json()
     u = data.get("username")
     p = data.get("password")
-
-    # Ищем пользователя в базе
-    user = User.query.filter_by(username=u).first()
-
-    # Если пользователя нет — ошибка
+    user = User.query.filter_by(username=u).first() #sql-запрос
     if not user:
-        return jsonify({"error": "Пользователь не найден. Зарегистрируйтесь."}), 404
-
-    # Если пароль не подошел — ошибка
+        return jsonify({"error": "Пользователь не найден"}), 404
     if not check_password_hash(user.password, p):
         return jsonify({"error": "Неверный пароль"}), 401
-
-    # Запоминаем ID пользователя в сессии (вход выполнен)
     session["uid"] = user.id
     return jsonify({"success": True})
 
 
-@app.route("/register", methods=["POST"])
+@app.route("/register", methods=["POST"])#post прячет данные внутри запроса
 def register():
-    #Регистрация нового пользователя
     data = request.get_json()
     u = data.get("username")
     p = data.get("password")
-
-    # Проверка: а нет ли уже такого пользователя?
-    existing_user = User.query.filter_by(username=u).first()
-    if existing_user:
+    if User.query.filter_by(username=u).first(): #User.query -обрщанеи к таблцие пользователей
         return jsonify({"error": "Такой пользователь уже есть"}), 409
-
-    # Создаем нового пользователя и шифруем пароль
     new_user = User(username=u, password=generate_password_hash(p))
-
     try:
-        db.session.add(new_user)
-        db.session.commit()  # Сохраняем в базу
-    except Exception as e:
-        db.session.rollback()  # Если ошибка — отменяем изменения
-        return jsonify({"error": "Ошибка базы данных"}), 500
-
-    # Сразу входим под ним
+        db.session.add(new_user)# висит в памяти
+        db.session.commit()# сохраняем
+    except:
+        db.session.rollback()
+        return jsonify({"error": "Ошибка БД"}), 500
     session["uid"] = new_user.id
     return jsonify({"success": True})
 
+
 @app.route("/logout", methods=["POST"])
 def logout():
-    #Выход из системы
-    session.clear()  # очищаем память о пользователе
+    session.clear()
     return jsonify({"success": True})
+
 
 @app.route("/ask", methods=["POST"])
 def ask():
-    """Обработка вопроса пользователя"""
     if "uid" not in session:
         return jsonify({"error": "Войдите в систему"}), 401
 
@@ -159,27 +160,37 @@ def ask():
     country_name = data.get("country")
     q = data.get("query")
 
-    # Шаг 1: Получаем факты о стране через внешний API
+    # Получаем данные о стране (включая список городов)
     info = get_country(country_name)
     if not info:
         return jsonify({"error": "Страна не найдена"}), 404
 
-    # Шаг 2: Формируем вопрос для ИИ и получаем ответ
-    prompt = f"Расскажи про {country_name}. Вопрос туриста: {q}. Отвечай подробно на русском."
-    answer = ask_ai(prompt)
+    # Формируем умный запрос
+    city_context = f" (город: {data.get('city', 'вся страна')})" if data.get('city') else ""
 
-    # Шаг 3: Сохраняем историю в базу данных PostgreSQL
+    prompt_text = (
+        f"Ты — эксперт-консультант по путешествиям.\n"
+        f"Страна: {info['name']}{city_context}.\n"
+        f"Вопрос туриста: '{q}'\n\n"
+        f"ЗАДАЧА:\n"
+        f"1. Дай ответ в 3-4 предложенияименно на этот вопрос.\n"
+        f"2. В конце добавь блок 'Полезные контакты:' со ссылкой, телефоном и советом.\n"
+        f"Пиши на русском. Не используй жирный шрифт (**) и (##)."
+    )
+
+    answer = ask_ai(prompt_text)
+    answer = answer.replace("**", "").replace("\n", "<br>")
+
     h = History(user_id=session["uid"], country=info['name'], question=q, answer=answer)
-
     try:
         db.session.add(h)
         db.session.commit()
     except:
         db.session.rollback()
 
-    # Шаг 4: Отправляем ответ обратно на сайт
     return jsonify({"answer": answer, "country_info": info})
 
+
 if __name__ == "__main__":
-    print("Сайт запущен: http://127.0.0.1:5000")
+    print("Сайт: http://127.0.0.1:5000")
     app.run(debug=True)
